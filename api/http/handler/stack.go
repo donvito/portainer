@@ -65,6 +65,8 @@ func NewStackHandler(bouncer *security.RequestBouncer) *StackHandler {
 		bouncer.RestrictedAccess(http.HandlerFunc(h.handlePutStack))).Methods(http.MethodPut)
 	h.Handle("/{endpointId}/stacks/{id}/stackfile",
 		bouncer.RestrictedAccess(http.HandlerFunc(h.handleGetStackFile))).Methods(http.MethodGet)
+	h.Handle("/{endpointId}/stacks/{id}/redeploy",
+		bouncer.RestrictedAccess(http.HandlerFunc(h.handlePostRedeploy))).Methods(http.MethodGet)
 	return h
 }
 
@@ -90,6 +92,9 @@ type (
 		StackFileContent string           `valid:"required"`
 		Env              []portainer.Pair `valid:""`
 		Prune            bool             `valid:"-"`
+	}
+	postStackRedeployRequest struct {
+		Prune bool `valid:"required"`
 	}
 )
 
@@ -791,4 +796,84 @@ func (handler *StackHandler) deployStack(config *stackDeploymentConfig) error {
 
 	handler.stackCreationMutex.Unlock()
 	return nil
+}
+
+// handlePostRedeploy handles POST requests on /:endpointId/stacks/:id/redeploy
+func (handler *StackHandler) handlePostRedeploy(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	stackID := vars["id"]
+
+	endpointID, err := strconv.Atoi(vars["endpointId"])
+	if err != nil {
+		httperror.WriteErrorResponse(w, err, http.StatusBadRequest, handler.Logger)
+		return
+	}
+
+	endpoint, err := handler.EndpointService.Endpoint(portainer.EndpointID(endpointID))
+	if err == portainer.ErrEndpointNotFound {
+		httperror.WriteErrorResponse(w, err, http.StatusNotFound, handler.Logger)
+		return
+	} else if err != nil {
+		httperror.WriteErrorResponse(w, err, http.StatusInternalServerError, handler.Logger)
+		return
+	}
+
+	stack, err := handler.StackService.Stack(portainer.StackID(stackID))
+	if err == portainer.ErrStackNotFound {
+		httperror.WriteErrorResponse(w, err, http.StatusNotFound, handler.Logger)
+		return
+	} else if err != nil {
+		httperror.WriteErrorResponse(w, err, http.StatusInternalServerError, handler.Logger)
+		return
+	}
+
+	var req postStackRedeployRequest
+	if err = json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httperror.WriteErrorResponse(w, ErrInvalidJSON, http.StatusBadRequest, handler.Logger)
+		return
+	}
+
+	_, err = govalidator.ValidateStruct(req)
+	if err != nil {
+		httperror.WriteErrorResponse(w, ErrInvalidRequestFormat, http.StatusBadRequest, handler.Logger)
+		return
+	}
+
+	securityContext, err := security.RetrieveRestrictedRequestContext(r)
+	if err != nil {
+		httperror.WriteErrorResponse(w, err, http.StatusInternalServerError, handler.Logger)
+		return
+	}
+
+	dockerhub, err := handler.DockerHubService.DockerHub()
+	if err != nil {
+		httperror.WriteErrorResponse(w, err, http.StatusInternalServerError, handler.Logger)
+		return
+	}
+
+	registries, err := handler.RegistryService.Registries()
+	if err != nil {
+		httperror.WriteErrorResponse(w, err, http.StatusInternalServerError, handler.Logger)
+		return
+	}
+
+	filteredRegistries, err := security.FilterRegistries(registries, securityContext)
+	if err != nil {
+		httperror.WriteErrorResponse(w, err, http.StatusInternalServerError, handler.Logger)
+		return
+	}
+
+	config := stackDeploymentConfig{
+		stack:      stack,
+		endpoint:   endpoint,
+		dockerhub:  dockerhub,
+		registries: filteredRegistries,
+		prune:      req.Prune,
+	}
+
+	err = handler.deployStack(&config)
+	if err != nil {
+		httperror.WriteErrorResponse(w, err, http.StatusInternalServerError, handler.Logger)
+		return
+	}
 }
