@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"net/http"
 	"path"
 	"regexp"
@@ -288,10 +289,12 @@ func (p *proxyTransport) replaceRegistryAuthenticationHeader(request *http.Reque
 	}
 
 	originalHeader := request.Header.Get("X-Registry-Auth")
+	log.Printf("[DEBUG] - Original X-Registry-Auth header: %s\n", originalHeader)
 
 	if originalHeader != "" {
 
 		decodedHeaderData, err := base64.StdEncoding.DecodeString(originalHeader)
+		log.Printf("[DEBUG] - Decoded header: %s\n", decodedHeaderData)
 		if err != nil {
 			return nil, err
 		}
@@ -301,15 +304,19 @@ func (p *proxyTransport) replaceRegistryAuthenticationHeader(request *http.Reque
 		if err != nil {
 			return nil, err
 		}
+		log.Printf("[DEBUG] - Header data: %+v\n", originalHeaderData)
 
 		authenticationHeader := createRegistryAuthenticationHeader(originalHeaderData.Serveraddress, accessContext)
+		log.Printf("[DEBUG] - Updated header: %+v\n", authenticationHeader)
 
 		headerData, err := json.Marshal(authenticationHeader)
 		if err != nil {
 			return nil, err
 		}
+		log.Printf("[DEBUG] - Updated header data: %s\n", string(headerData))
 
 		header := base64.StdEncoding.EncodeToString(headerData)
+		log.Printf("[DEBUG] - Encoded header: %s\n", header)
 
 		request.Header.Set("X-Registry-Auth", header)
 	}
